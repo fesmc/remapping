@@ -1,9 +1,11 @@
 cd(@__DIR__)
 import Pkg; Pkg.activate(".")
 using NCDatasets
-using Proj, GeoInterface, ArchGDAL
+using Proj
+using GeographicLib
+using LinearAlgebra
 
-function read_cdo_grid_file(filepath::String)
+function read_cdo_grid_file(filepath::String,grid_name::String,domain::String)
     grid_dict = Dict{String, Any}()
 
     for line in eachline(filepath)
@@ -31,6 +33,18 @@ function read_cdo_grid_file(filepath::String)
             end
         end
     end
+
+    # Define projection string based on grid_dict
+    grid_dict["proj_str"] = "+proj=stere " *
+               "+lat_0=$(grid_dict["latitude_of_projection_origin"]) " *
+               "+lat_ts=$(grid_dict["standard_parallel"]) " *
+               "+lon_0=$(grid_dict["straight_vertical_longitude_from_pole"]) " *
+               "+k=1 +x_0=$(grid_dict["false_easting"] * 1000) +y_0=$(grid_dict["false_northing"] * 1000) " * # Convert to meters
+               "+a=$(grid_dict["semi_major_axis"]) +rf=$(grid_dict["inverse_flattening"]) +units=m +no_defs" # Units set to meters
+
+    # Add domain and grid_name too
+    grid_dict["domain"] = domain
+    grid_dict["grid_name"] = grid_name
 
     return grid_dict
 end
@@ -84,16 +98,9 @@ function define_grid_nc(grid_info::Dict{String,Any}, filename::String)
 end
 
 function projected_to_latlon(grid_info::Dict, xc::Vector{<:Real}, yc::Vector{<:Real})
-    # Define projection string based on grid_info
-    proj_str = "+proj=stere " *
-               "+lat_0=$(grid_info["latitude_of_projection_origin"]) " *
-               "+lat_ts=$(grid_info["standard_parallel"]) " *
-               "+lon_0=$(grid_info["straight_vertical_longitude_from_pole"]) " *
-               "+k=1 +x_0=$(grid_info["false_easting"] * 1000) +y_0=$(grid_info["false_northing"] * 1000) " * # Convert to meters
-               "+a=$(grid_info["semi_major_axis"]) +rf=$(grid_info["inverse_flattening"]) +units=m +no_defs" # Units set to meters
-
+    
     # Define the source and destination CRS
-    source_crs = proj_str
+    source_crs = grid_info["proj_str"]
     dest_crs = "EPSG:4326" # Latitude/longitude
 
     # Create the transformation object
@@ -120,32 +127,83 @@ function projected_to_latlon(grid_info::Dict, xc::Vector{<:Real}, yc::Vector{<:R
     return lat2D, lon2D
 end
 
+function geodesic_polygon_area(p)
+
+    lons = first.(p);
+    lats = last.(p);
+
+    pg = Polygon(lons,lats)
+
+    n, perimeter, area = properties(pg)
+
+    return area
+end
+
+function extend2D(var)
+    nx, ny = size(var)
+    vare = fill(NaN,nx+2,ny+2)
+    vare[2:nx+1,2:ny+1] .= var
+
+    vare[1,2:ny+1]    = var[1,:] .- (var[2,:].-var[1,:])
+    vare[nx+2,2:ny+1] = var[nx,:] .+ (var[nx,:].-var[nx-1,:])
+    vare[:,1]    = vare[:,2] .- (vare[:,3].-vare[:,2])
+    vare[:,ny+2] = vare[:,ny+1] .+ (vare[:,ny+1].-vare[:,ny])
+    
+    # Fill the corners
+    vare[1, 1]       = var[1, 1] .- (var[2, 1] .- var[1, 1]) .- (var[1, 2] .- var[1, 1])
+    vare[1, ny+2]    = var[1, ny] .- (var[2, ny] .- var[1, ny]) .+ (var[1, ny] .- var[1, ny-1])
+    vare[nx+2, 1]    = var[nx, 1] .+ (var[nx, 1] .- var[nx-1, 1]) .- (var[nx, 2] .- var[nx, 1])
+    vare[nx+2, ny+2] = var[nx, ny] .+ (var[nx, ny] .- var[nx-1, ny]) .+ (var[nx, ny] .- var[nx, ny-1])
+
+    return vare
+end
+
 function cell_areas(lat2D::Matrix{Float64}, lon2D::Matrix{Float64})
-    ny, nx = size(lat2D)
-    area = zeros(nx, ny)
+    nx, ny = size(lat2D)
+    area = fill(0.0, nx, ny)
 
-    for j in 1:ny, i in 1:nx
-        if i < nx && j < ny
-            # Define the polygon vertices for the cell
-            vertices = [
-                (lon2D[j, i], lat2D[j, i]),
-                (lon2D[j, i + 1], lat2D[j, i + 1]),
-                (lon2D[j + 1, i + 1], lat2D[j + 1, i + 1]),
-                (lon2D[j + 1, i], lat2D[j + 1, i]),
-                (lon2D[j, i], lat2D[j, i])  # Close the polygon
-            ]
+    lon2De = extend2D(lon2D)
+    lat2De = extend2D(lat2D)
+    
+    for j in 2:ny+1, i in 2:nx+1
+        
+        im1 = i-1
+        ip1 = i+1
+        jm1 = j-1
+        jp1 = j+1
 
-            # Create a GeoInterface Polygon
-            polygon = ArchGDAL.createpolygon(vertices)
+        # Bottom-left
+        lon1 = 0.25*(lon2De[i,j]+lon2De[im1,j]+lon2De[im1,jm1]+lon2De[i,jm1])
+        lat1 = 0.25*(lat2De[i,j]+lat2De[im1,j]+lat2De[im1,jm1]+lat2De[i,jm1])
 
-            # Calculate the area (in degrees^2)
-            area[i, j] = ArchGDAL.geomarea(polygon) # Correct usage
-        else
-            area[i,j] = NaN; #edge cells do not have a full area, so set to NaN.
-        end
+        # Bottom-right
+        lon2 = 0.25*(lon2De[i,j]+lon2De[ip1,j]+lon2De[ip1,jm1]+lon2De[i,jm1])
+        lat2 = 0.25*(lat2De[i,j]+lat2De[ip1,j]+lat2De[ip1,jm1]+lat2De[i,jm1])
+
+        # Top-right
+        lon3 = 0.25*(lon2De[i,j]+lon2De[ip1,j]+lon2De[ip1,jp1]+lon2De[i,jp1])
+        lat3 = 0.25*(lat2De[i,j]+lat2De[ip1,j]+lat2De[ip1,jp1]+lat2De[i,jp1])
+
+        # Top-left
+        lon4 = 0.25*(lon2De[i,j]+lon2De[im1,j]+lon2De[im1,jp1]+lon2De[i,jp1])
+        lat4 = 0.25*(lat2De[i,j]+lat2De[im1,j]+lat2De[im1,jp1]+lat2De[i,jp1])
+
+        vertices = [
+            (lon1,lat1),
+            (lon2,lat2),
+            (lon3,lat3),
+            (lon4,lat4),
+            (lon1,lat1)     # Close the polygon
+        ]
+
+        area[i-1, j-1] = geodesic_polygon_area(vertices)
+
     end
 
-    return Matrix(area')
+    # Recalculate area around the border using extended values
+    area = extend2D(area[2:nx-1,2:ny-1])
+
+    return area
 end
 
 function write_2d_variable(
@@ -181,14 +239,15 @@ function gen_mask(xc,yc)
     return mask
 end
 
-grid_info = read_cdo_grid_file("../maps/grid_GRL-PAL-32KM.txt")
+grid_info = read_cdo_grid_file("../maps/grid_GRL-PAL-32KM.txt","GRL-PAL-32KM","Greenland")
 
 # Create a new file
-filename = "empty_mask.nc"
+filename = "$(grid_info["grid_name"])_grid.nc"
 xc, yc = define_grid_nc(grid_info, filename)
 
 lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)
 area = cell_areas(lat2D, lon2D)
+#area = calculate_cell_areas(lat2D, lon2D)
 
 mask = gen_mask(xc,yc);
 

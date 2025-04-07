@@ -15,7 +15,13 @@ The grid description file can also be produced via `cdo` directly, if a NetCDF f
 
 Once a grid description file has been made, we can create an actual NetCDF file with the grid information defined. This will include the projection information, Cartesian axes (`xc`, `yc`), lat/lon information (`lat2D`, `lon2D`) and the grid cell area (`area`).
 
-This can be created by going into the `grid` subfolder and running the script `define_grid.jl` with the variables modified appropriately for your current grid.
+This can be created by going into the `grid` subfolder and running the script `julia define_grid.jl DOMAIN GRIDNAME` with the variables modified appropriately for your current grid. So to get a grid file for the Greenland domain on the grid GRL-32KM run:
+
+```bash
+julia define_grid.jl Greenland GRL-32KM
+```
+
+This will produce a file in the same folder named "GRL-32KM_grid.nc".
 
 ### Step 3: generate grid remapping files
 

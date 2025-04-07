@@ -1,7 +1,7 @@
 cd(@__DIR__)
 import Pkg; Pkg.activate(".")
 using NCDatasets
-using Proj
+using Proj, GeoInterface, ArchGDAL
 
 function read_cdo_grid_file(filepath::String)
     grid_dict = Dict{String, Any}()
@@ -111,10 +111,41 @@ function projected_to_latlon(grid_info::Dict, xc::Vector{<:Real}, yc::Vector{<:R
     lat2D = [coord[2] for coord in lonlat]
 
     # Reshape to 2D arrays (nx, ny)
-    lon2D = reshape(lon2D, length(xc), length(yc))
-    lat2D = reshape(lat2D, length(xc), length(yc))
+    lon2D = reshape(lon2D, length(yc), length(xc))
+    lat2D = reshape(lat2D, length(yc), length(xc))
+
+    lon2D = Matrix(lon2D')
+    lat2D = Matrix(lat2D')
 
     return lat2D, lon2D
+end
+
+function cell_areas(lat2D::Matrix{Float64}, lon2D::Matrix{Float64})
+    ny, nx = size(lat2D)
+    area = zeros(nx, ny)
+
+    for j in 1:ny, i in 1:nx
+        if i < nx && j < ny
+            # Define the polygon vertices for the cell
+            vertices = [
+                (lon2D[j, i], lat2D[j, i]),
+                (lon2D[j, i + 1], lat2D[j, i + 1]),
+                (lon2D[j + 1, i + 1], lat2D[j + 1, i + 1]),
+                (lon2D[j + 1, i], lat2D[j + 1, i]),
+                (lon2D[j, i], lat2D[j, i])  # Close the polygon
+            ]
+
+            # Create a GeoInterface Polygon
+            polygon = ArchGDAL.createpolygon(vertices)
+
+            # Calculate the area (in degrees^2)
+            area[i, j] = ArchGDAL.geomarea(polygon) # Correct usage
+        else
+            area[i,j] = NaN; #edge cells do not have a full area, so set to NaN.
+        end
+    end
+
+    return Matrix(area')
 end
 
 function write_2d_variable(
@@ -157,8 +188,11 @@ filename = "empty_mask.nc"
 xc, yc = define_grid_nc(grid_info, filename)
 
 lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)
+area = cell_areas(lat2D, lon2D)
+
 mask = gen_mask(xc,yc);
 
 write_2d_variable(filename,"lat2D",lat2D)
 write_2d_variable(filename,"lon2D",lon2D)
+write_2d_variable(filename,"area",area)
 write_2d_variable(filename,"mask",mask)

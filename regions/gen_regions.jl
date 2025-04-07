@@ -1,6 +1,7 @@
 cd(@__DIR__)
 import Pkg; Pkg.activate(".")
 using NCDatasets
+using Proj
 
 function read_cdo_grid_file(filepath::String)
     grid_dict = Dict{String, Any}()
@@ -34,7 +35,7 @@ function read_cdo_grid_file(filepath::String)
     return grid_dict
 end
 
-function write_regions(grid_info::Dict{String,Any}, filename::String)
+function define_grid_nc(grid_info::Dict{String,Any}, filename::String)
     # Extract basic grid info
     xsize = grid_info["xsize"]
     ysize = grid_info["ysize"]
@@ -78,6 +79,42 @@ function write_regions(grid_info::Dict{String,Any}, filename::String)
     crs.attrib["inverse_flattening"] = grid_info["inverse_flattening"]
 
     close(ds)
+
+    return collect(xc), collect(yc)
+end
+
+function projected_to_latlon(grid_info::Dict, xc::Vector{<:Real}, yc::Vector{<:Real})
+    # Define projection string based on grid_info
+    proj_str = "+proj=stere " *
+               "+lat_0=$(grid_info["latitude_of_projection_origin"]) " *
+               "+lat_ts=$(grid_info["standard_parallel"]) " *
+               "+lon_0=$(grid_info["straight_vertical_longitude_from_pole"]) " *
+               "+k=1 +x_0=$(grid_info["false_easting"] * 1000) +y_0=$(grid_info["false_northing"] * 1000) " * # Convert to meters
+               "+a=$(grid_info["semi_major_axis"]) +rf=$(grid_info["inverse_flattening"]) +units=m +no_defs" # Units set to meters
+
+    # Define the source and destination CRS
+    source_crs = proj_str
+    dest_crs = "EPSG:4326" # Latitude/longitude
+
+    # Create the transformation object
+    transformation = Proj.Transformation(source_crs, dest_crs; always_xy=true)
+
+    # Create meshgrid of x/y (convert km to m)
+    X = repeat(xc' .* 1000, length(yc), 1)  # (ysize, xsize) in meters
+    Y = repeat(yc  .* 1000, 1, length(xc))  # (ysize, xsize) in meters
+
+    # Apply the transformation
+    lonlat = transformation.(X,Y)
+
+    # Extract the longitude and latitude
+    lon2D = [coord[1] for coord in lonlat]
+    lat2D = [coord[2] for coord in lonlat]
+
+    # Reshape to 2D arrays (nx, ny)
+    lon2D = reshape(lon2D, length(xc), length(yc))
+    lat2D = reshape(lat2D, length(xc), length(yc))
+
+    return lat2D, lon2D
 end
 
 function write_2d_variable(
@@ -87,9 +124,6 @@ function write_2d_variable(
     xdim::String = "xc",
     ydim::String = "yc",
 )
-
-    
-    
 
     # Open NetCDF file in append mode
     ds = Dataset(filename, "a")
@@ -107,7 +141,7 @@ function write_2d_variable(
     # end
 
     var.attrib["grid_mapping"] = "crs"
-    
+
     close(ds)
 end
 
@@ -120,13 +154,11 @@ grid_info = read_cdo_grid_file("../maps/grid_GRL-PAL-32KM.txt")
 
 # Create a new file
 filename = "empty_mask.nc"
-write_regions(grid_info, filename)
+xc, yc = define_grid_nc(grid_info, filename)
 
-nc = NCDataset(filename)
-xc = nc["xc"][:]
-yc = nc["yc"][:]
-close(nc)
-
+lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)
 mask = gen_mask(xc,yc);
 
+write_2d_variable(filename,"lat2D",lat2D)
+write_2d_variable(filename,"lon2D",lon2D)
 write_2d_variable(filename,"mask",mask)

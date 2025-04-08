@@ -1,12 +1,12 @@
 gridtype = projection
-gridsize =      19186
-xsize    =         54
+gridsize =       6734
+xsize    =         74
 ysize    =         91
 xname    = xc
 xunits   = km
 yname    = yc
 yunits   = km
-xfirst   =     -720.000000
+xfirst   =    -1360.000000
 xinc     =       32.000000
 yfirst   =    -3450.000000
 yinc     =       32.000000

@@ -11,7 +11,7 @@ function define_my_grid(domain,grid_name,griddes)
     grid_info = read_cdo_grid_file(griddes,grid_name,domain)
 
     # Create a new file
-    filename = "$(grid_info["grid_name"])_grid.nc"
+    filename = "maps/grid_$(grid_info["grid_name"]).nc"
     xc, yc = define_grid_nc(grid_info, filename)
 
     lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)

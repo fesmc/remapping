@@ -74,11 +74,26 @@ function define_grid_nc(grid_info::Dict{String,Any}, filename::String)
 
     # Define coordinate variables
     var_xc = defVar(ds, xname, Float64, (xname,))
-    var_yc = defVar(ds, yname, Float64, (yname,))
     var_xc.attrib["units"] = xunits
-    var_yc.attrib["units"] = yunits
     var_xc[:] = xc
+    
+    var_yc = defVar(ds, yname, Float64, (yname,))
+    var_yc.attrib["units"] = yunits
     var_yc[:] = yc
+
+    # Add x2D, y2D
+    nx = size(xc,1)
+    ny = size(yc,1)
+    x2D = xc .* ones(1, ny)
+    y2D = ones(nx, 1) .* yc'
+
+    var_x2D = defVar(ds, "x2D", Float64, (xname,yname))
+    var_x2D.attrib["units"] = xunits
+    var_x2D[:] = x2D
+
+    var_y2D = defVar(ds, "y2D", Float64, (xname,yname))
+    var_y2D.attrib["units"] = yunits
+    var_y2D[:] = y2D
 
     # Define the projection variable 'crs'
     crs = defVar(ds, "crs", Int32, ())
@@ -131,6 +146,11 @@ function geodesic_polygon_area(p)
     lons = first.(p);
     lats = last.(p);
 
+    # Make sure longitudes are 0:360
+    if minimum(lons) < 0
+        lons .= lons .+ 180
+    end
+
     pg = Polygon(lons,lats)
 
     n, perimeter, area = properties(pg)
@@ -160,43 +180,51 @@ end
 function cell_areas(lat2D::Matrix{Float64}, lon2D::Matrix{Float64})
     nx, ny = size(lat2D)
     area = fill(0.0, nx, ny)
-
-    lon2De = extend2D(lon2D)
-    lat2De = extend2D(lat2D)
     
-    for j in 2:ny+1, i in 2:nx+1
+    for j in 2:ny-1, i in 2:nx-1
         
         im1 = i-1
         ip1 = i+1
         jm1 = j-1
         jp1 = j+1
-
-        # Bottom-left
-        lon1 = 0.25*(lon2De[i,j]+lon2De[im1,j]+lon2De[im1,jm1]+lon2De[i,jm1])
-        lat1 = 0.25*(lat2De[i,j]+lat2De[im1,j]+lat2De[im1,jm1]+lat2De[i,jm1])
-
-        # Bottom-right
-        lon2 = 0.25*(lon2De[i,j]+lon2De[ip1,j]+lon2De[ip1,jm1]+lon2De[i,jm1])
-        lat2 = 0.25*(lat2De[i,j]+lat2De[ip1,j]+lat2De[ip1,jm1]+lat2De[i,jm1])
-
-        # Top-right
-        lon3 = 0.25*(lon2De[i,j]+lon2De[ip1,j]+lon2De[ip1,jp1]+lon2De[i,jp1])
-        lat3 = 0.25*(lat2De[i,j]+lat2De[ip1,j]+lat2De[ip1,jp1]+lat2De[i,jp1])
-
-        # Top-left
-        lon4 = 0.25*(lon2De[i,j]+lon2De[im1,j]+lon2De[im1,jp1]+lon2De[i,jp1])
-        lat4 = 0.25*(lat2De[i,j]+lat2De[im1,j]+lat2De[im1,jp1]+lat2De[i,jp1])
+        
+        vertices = [
+            (lon2D[i,j],lat2D[i,j]),
+            (lon2D[ip1,j],lat2D[ip1,j]),
+            (lon2D[ip1,jp1],lat2D[ip1,jp1]),
+            (lon2D[i,jp1],lat2D[i,jp1]),
+            (lon2D[i,j],lat2D[i,j])     # Close the polygon
+        ]
+        area1 = geodesic_polygon_area(vertices)
 
         vertices = [
-            (lon1,lat1),
-            (lon2,lat2),
-            (lon3,lat3),
-            (lon4,lat4),
-            (lon1,lat1)     # Close the polygon
+            (lon2D[i,j],lat2D[i,j]),
+            (lon2D[i,jp1],lat2D[i,jp1]),
+            (lon2D[im1,jp1],lat2D[im1,jp1]),
+            (lon2D[im1,jm1],lat2D[im1,jm1]),
+            (lon2D[i,j],lat2D[i,j])     # Close the polygon
         ]
+        area2 = geodesic_polygon_area(vertices)
 
-        area[i-1, j-1] = geodesic_polygon_area(vertices)
+        vertices = [
+            (lon2D[i,j],lat2D[i,j]),
+            (lon2D[im1,j],lat2D[im1,j]),
+            (lon2D[im1,jm1],lat2D[im1,jm1]),
+            (lon2D[i,jm1],lat2D[i,jm1]),
+            (lon2D[i,j],lat2D[i,j])     # Close the polygon
+        ]
+        area3 = geodesic_polygon_area(vertices)
 
+        vertices = [
+            (lon2D[i,j],lat2D[i,j]),
+            (lon2D[i,jm1],lat2D[i,jm1]),
+            (lon2D[ip1,jm1],lat2D[ip1,jm1]),
+            (lon2D[ip1,j],lat2D[ip1,j]),
+            (lon2D[i,j],lat2D[i,j])     # Close the polygon
+        ]
+        area4 = geodesic_polygon_area(vertices)
+
+        area[i,j] = 0.25*(area1+area2+area3+area4)
     end
 
     # Recalculate area around the border using extended values

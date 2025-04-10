@@ -9,8 +9,6 @@ using GeometryOps
 
 using NCDatasets
 
-using FilePaths
-
 # Several useful functions
 include("../grid/grids.jl")
 
@@ -84,52 +82,44 @@ fig
 
 
 pt = Point2f(-45.0, 70.0)
-polygon = Polygon(Point2f.(ring))
+polygon = GeometryOps.Polygon(Point2f.(ring))
 GeometryOps.contains(polygon, pt)
 
 ### Saving a region ###
 
-domain = "Greenland"
-grid_name = "GRL-PAL-16KM"
+# Define the grid
+grid = generate_grid("Greenland","GRL-PAL-16KM")
 
-grid_file = "../maps/grid_$grid_name.nc"
-
-# Open the file
-ds = NCDataset(grid_file)
-
-nx, ny = size(ds["lon2D"])
+nx, ny = grid["nx"], grid["ny"]
 mask = fill(0.0,nx,ny)
 
-polygon = Polygon(Point2f.(ring))
+polygon = GeometryOps.Polygon(Point2f.(ring))
 
 for i in 1:nx, j in 1:ny
-    pt = Point2f(ds["lon2D"][i,j],ds["lat2D"][i,j])
+    pt = Point2f(grid["lon2D"][i,j],grid["lat2D"][i,j])
     if GeometryOps.contains(polygon, pt)
         mask[i,j] = 1.0
     end
 end
 
-close(ds)
-
-# Copy the file using the `cp` function from FilePaths.jl
-output_file = "../out/$(grid_name)_REGIONS.nc"
-cp(input_file, output_file,force=true)
-write_2d_variable(output_file,"mask",mask)
-
+# Write a new file with the mask
+filename_out = "../out/$(grid["grid_name"])_REGIONS.nc"
+grid_write_nc(grid,filename_out)
+write_2d_variable(filename_out,"mask",mask)
 
 begin
     fig = Figure()
     ax = Axis(fig[1, 1]; aspect=DataAspect())
     lines!(ax, polygon, color=:black)
     kk = findall(mask .> 0.0)
-    scatter!(ax,ds["lon2D"][kk],ds["lat2D"][kk])
+    scatter!(ax,grid["lon2D"][kk],grid["lat2D"][kk])
     fig
 end
 
 begin
     fig = Figure()
     ax = Axis(fig[1, 1]; aspect=DataAspect())
-    heatmap!(ax,ds["xc"],ds["yc"],mask)
+    heatmap!(ax,grid["xc"],grid["yc"],mask)
     fig
 end
 

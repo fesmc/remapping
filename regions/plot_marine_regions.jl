@@ -16,14 +16,33 @@ include("../grid/grids.jl")
 #table = Shapefile.Table("marineregions/World_EEZ_v12_20231025/eez_boundaries_v12.shp")
 table = Shapefile.Table("marineregions/World_EEZ_v12_20231025/eez_v12.shp")
 
-# Find regions of interest
-kk = []
-for (k,reg) in enumerate(table.GEONAME)
-    if occursin("Greenland",reg)
-        push!(kk,k)
+myregions = Dict{String,Any}()
+myregions["Greenland"] = "Greenland (Denmark)"
+myregions["North America"] = ["Canadian Exclusive Economic Zone",
+                              "Overlapping claim: Canada / United States",
+                              "United States Exclusive Economic Zone",
+                              "Alaska (United States)"]
+myregions["Russia"] = "Russia"
+myregions["Svalbard"] = "Svalbard (Norway)"
+
+function find_index_of_region(geonames,geoname)
+    # Find region(s) of interest
+    kk = []
+    for (k,reg) in enumerate(table.GEONAME)
+        if reg == geoname
+            println(reg)
+            push!(kk,k)
+        elseif occursin(geoname,reg)
+            println(reg)
+            push!(kk,k)
+        end
     end
+
+    return kk
 end
 
+# Get region indices
+kk = find_index_of_region(table.GEONAME,"Greenland")
 
 # Extract geometries
 geoms = GeoInterface.geometry.(table)
@@ -47,30 +66,24 @@ end
 fig
 
 
-# Test point (longitude, latitude)
+# Extract coordinates of the polygon(s) for this region
 k = kk[1]
 geom = geoms[k]
-pt = Point2f(-45.0, 70.0)
-GeometryOps.contains(geom, pt)
-
-
-
-# Assuming `geom` is your Polygon object
-coords = GeoInterface.coordinates(geom)  # Extract coordinates
+coords = GeoInterface.coordinates(geom)
 
 # If it's a multipolygon or polygon with holes, you might have a nested structure
 # For a multipolygon, each polygon can be isolated like this:
 
-if eltype(coords) <: Tuple  # Simple polygon with one outer boundary
-    rings = [coords]  # Just one region
+if typeof(coords) <: Vector{Vector{<:Real}}  # Simple polygon with one outer boundary
+    rings = [coords[1]]  # Just one region
 else
-    rings = coords  # Multipolygon: List of polygons
+    rings = coords[1]  # Multipolygon: List of polygons
 end
 
 # Now, `rings` contains individual polygon parts (rings)
 
 # Example: Plot the first ring of the first polygon
-ring = rings[1][1]  # Outer boundary of the first polygon (or the first multipolygon part)
+ring = rings[1]  # Outer boundary of the first polygon (or the first multipolygon part)
 xs = first.(ring)
 ys = last.(ring)
 
@@ -80,27 +93,52 @@ ax = Axis(fig[1, 1]; aspect=DataAspect())
 lines!(ax, xs, ys, color=:black)
 fig
 
-
+# Testing to see if it works
 pt = Point2f(-45.0, 70.0)
 polygon = GeometryOps.Polygon(Point2f.(ring))
 GeometryOps.contains(polygon, pt)
 
 ### Saving a region ###
 
-# Define the grid
-grid = generate_grid("Greenland","GRL-PAL-16KM")
+function mask_of_region(grid,ring::AbstractVector{<:Real})
 
-nx, ny = grid["nx"], grid["ny"]
-mask = fill(0.0,nx,ny)
+    # Get a polygon representation of the current ring
+    polygon = GeometryOps.Polygon(Point2f.(ring))
 
-polygon = GeometryOps.Polygon(Point2f.(ring))
-
-for i in 1:nx, j in 1:ny
-    pt = Point2f(grid["lon2D"][i,j],grid["lat2D"][i,j])
-    if GeometryOps.contains(polygon, pt)
-        mask[i,j] = 1.0
+    # Loop over grid points and find which points are inside ring
+    mask = fill(0.0,grid["nx"],grid["ny"])
+    for i in 1:grid["nx"], j in 1:grid["ny"]
+        pt = Point2f(grid["lon2D"][i,j],grid["lat2D"][i,j])
+        if GeometryOps.contains(polygon, pt)
+            mask[i,j] = 1.0
+        end
     end
+
+    return mask
 end
+
+function mask_of_regions(grid,rings)
+
+    mask = fill(0.0,grid["nx"],grid["ny"])
+    
+    for i in 1:grid["nx"], j in 1:grid["ny"]
+        pt = Point2f(grid["lon2D"][i,j],grid["lat2D"][i,j])
+        for ring in rings
+            polygon = GeometryOps.Polygon(Point2f.(ring))
+            if GeometryOps.contains(polygon, pt)
+                mask[i,j] = 1.0
+                break
+            end
+        end
+    end
+
+    return mask
+end
+
+# Define the grid
+grid = generate_grid("North","NH-32KM")
+
+mask = mask_of_regions(grid,rings[1:3])
 
 # Write a new file with the mask
 filename_out = "../out/$(grid["grid_name"])_REGIONS.nc"

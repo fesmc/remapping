@@ -310,7 +310,7 @@ function geodesic_polygon_area(p)
         lons .= lons .+ 180
     end
 
-    pg = Polygon(lons,lats)
+    pg = GeographicLib.Polygon(lons,lats)
 
     n, perimeter, area = properties(pg)
 

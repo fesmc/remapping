@@ -18,10 +18,10 @@ Once a grid description file has been made, we can create an actual NetCDF file 
 This can be created by going into the `grid` subfolder and running the script `julia define_grid.jl DOMAIN GRIDNAME` with the variables modified appropriately for your current grid. So to get a grid file for the Greenland domain on the grid GRL-32KM run:
 
 ```bash
-julia define_grid.jl Greenland GRL-32KM
+julia grid/define_grid.jl Greenland GRL-32KM
 ```
 
-This will produce a file in the same folder named "GRL-32KM_grid.nc".
+This will produce a file in the output folder named "out/GRL-32KM_grid.nc", as well as a file with the standard grid name in the maps folder "maps/grid_GRL-32KM.nc". The latter is convenient for remapping via cdo commands later, so that the target nc file is always together with the grid description file.
 
 ### Step 3: generate grid remapping files
 

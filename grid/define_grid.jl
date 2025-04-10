@@ -9,9 +9,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     domain = ARGS[1]
     grid_name = ARGS[2]
 
-    println("domain = $domain")
-    println("grid_name = $grid_name")
+    println("domain, grid_name = $domain, $grid_name")
 
     # Define the grid
-    define_my_grid(domain,grid_name)
+    grid = generate_grid(domain,grid_name)
+
+    # Write to output file
+    filename = joinpath("../maps","grid_$(grid_name).nc")
+    grid_write_nc(grid,filename)
+
 end

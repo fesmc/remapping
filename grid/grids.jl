@@ -4,8 +4,116 @@ using Proj
 using GeographicLib
 using LinearAlgebra
 
+function generate_grid(domain::String,grid_name::String,
+    xc::AbstractVector{<:Real},yc::AbstractVector{<:Real};
+    proj_str::String="",xunits::String="km",yunits::String="km")
+    # Generate a grid object containing all handy information for grid defintion
+    # Here: generate from predefined axis information
+    
+    # Define grid object
+    grid = Dict{String,Any}()
+
+    # Add values
+
+    grid["domain"] = domain
+    grid["grid_name"] = grid_name
+    grid["proj_str"] = proj_str
+    grid["proj_cf"] = proj_to_cf(grid["proj_str"])
+
+    grid["xunits"] = xunits
+    grid["yunits"] = yunits
+    
+    grid["x0"], grid["x1"] = extrema(xc)
+    grid["y0"], grid["y1"] = extrema(yc)
+    grid["dx"] = xc[2] - xc[1]
+    grid["nx"] = size(xc,1)
+    grid["dy"] = yc[2] - yc[1]
+    grid["ny"] = size(yc,1)
+    
+    # Save coordinate vectors
+
+    grid["xc"] = xc
+    grid["yc"] = yc
+
+    # Add x2D, y2D
+    grid["x2D"] = xc .* ones(1, grid["ny"])
+    grid["y2D"] = ones(grid["nx"], 1) .* yc'
+
+    # Get latitude and longitude of projection
+    grid["lat2D"], grid["lon2D"] = projected_to_latlon(grid["xc"], grid["yc"], grid["proj_str"])
+    
+    # Get cell areas
+    grid["area"] = cell_areas(grid["lat2D"], grid["lon2D"])
+
+    return grid
+end
+
+function generate_grid(domain::String,grid_name::String,
+    x0::Real,dx::Real,nx::Integer,y0::Real,dy::Real,ny::Integer;
+    proj_str::String="",xunits::String="km",yunits::String="km")
+    # Generate a grid object containing all handy information for grid defintion
+    # Here: generate from axis information
+    
+    # Define grid object
+    grid = Dict{String,Any}()
+
+    # Add values
+
+    grid["domain"] = domain
+    grid["grid_name"] = grid_name
+    grid["proj_str"] = proj_str
+    grid["proj_cf"] = proj_to_cf(grid["proj_str"])
+    
+    grid["xunits"] = xunits
+    grid["yunits"] = yunits
+    
+    grid["x0"] = Float64(x0)
+    grid["dx"] = Float64(dx)
+    grid["nx"] = nx
+    grid["y0"] = Float64(y0)
+    grid["dy"] = Float64(dy)
+    grid["ny"] = ny
+    
+    grid["x1"] = grid["x0"] + grid["dx"] * (grid["nx"] - 1)
+    grid["y1"] = grid["y0"] + grid["dy"] * (grid["ny"] - 1)
+    
+    # Construct coordinate vectors
+    grid["xc"] = collect( range(start=grid["x0"],step=grid["dx"],length=grid["nx"]) )
+    grid["yc"] = collect( range(start=grid["y0"],step=grid["dy"],length=grid["ny"]) )
+
+    # Add x2D, y2D
+    grid["x2D"] = grid["xc"] .* ones(1, grid["ny"])
+    grid["y2D"] = ones(grid["nx"], 1) .* grid["yc"]'
+
+    # Get latitude and longitude of projection
+    grid["lat2D"], grid["lon2D"] = projected_to_latlon(grid["xc"], grid["yc"], grid["proj_str"])
+    
+    # Get cell areas
+    grid["area"] = cell_areas(grid["lat2D"], grid["lon2D"])
+
+    return grid
+end
+
+function generate_grid(domain::String,grid_name::String;
+            griddes::String = "../maps/grid_<GRID_NAME>.txt")
+    # Generate a grid object containing all handy information for grid defintion
+    # Here: generate from a cdo grid description file
+
+    # Load cdo grid description file
+    griddes = replace(griddes,"<GRID_NAME>" => grid_name)
+    info = read_cdo_grid_file(griddes,grid_name,domain)
+
+    grid = generate_grid(   domain,grid_name,
+                            info["xfirst"],info["xinc"],info["xsize"],
+                            info["yfirst"],info["yinc"],info["ysize"],
+                            proj_str=info["proj_str"],xunits=info["xunits"], 
+                            yunits=info["yunits"] )
+
+    return grid
+end
+
 function read_cdo_grid_file(filepath::String,grid_name::String,domain::String)
-    grid_dict = Dict{String, Any}()
+    grid_info = Dict{String, Any}()
 
     for line in eachline(filepath)
         # Remove leading/trailing whitespace
@@ -26,120 +134,147 @@ function read_cdo_grid_file(filepath::String,grid_name::String,domain::String)
                 if isinteger(parsed_value)
                     parsed_value = Int(parsed_value)
                 end
-                grid_dict[key] = parsed_value
+                grid_info[key] = parsed_value
             else
-                grid_dict[key] = value
+                grid_info[key] = String(value)
             end
         end
     end
 
-    # Define projection string based on grid_dict
-    grid_dict["proj_str"] = "+proj=stere " *
-               "+lat_0=$(grid_dict["latitude_of_projection_origin"]) " *
-               "+lat_ts=$(grid_dict["standard_parallel"]) " *
-               "+lon_0=$(grid_dict["straight_vertical_longitude_from_pole"]) " *
-               "+k=1 +x_0=$(grid_dict["false_easting"] * 1000) +y_0=$(grid_dict["false_northing"] * 1000) " * # Convert to meters
-               "+a=$(grid_dict["semi_major_axis"]) +rf=$(grid_dict["inverse_flattening"]) +units=m +no_defs" # Units set to meters
+    # Define projection string based on grid_info
+    grid_info["proj_str"] = "+proj=stere " *
+               "+lat_0=$(grid_info["latitude_of_projection_origin"]) " *
+               "+lat_ts=$(grid_info["standard_parallel"]) " *
+               "+lon_0=$(grid_info["straight_vertical_longitude_from_pole"]) " *
+               "+k=1 +x_0=$(grid_info["false_easting"] * 1000) +y_0=$(grid_info["false_northing"] * 1000) " * # Convert to meters
+               "+a=$(grid_info["semi_major_axis"]) +rf=$(grid_info["inverse_flattening"]) +units=m +no_defs" # Units set to meters
 
     # Add domain and grid_name too
-    grid_dict["domain"] = domain
-    grid_dict["grid_name"] = grid_name
+    grid_info["domain"] = domain
+    grid_info["grid_name"] = grid_name
 
-    return grid_dict
+    return grid_info
 end
 
-function define_my_grid(domain,grid_name;fldr="../maps",
-    filename="grid_<GRID_NAME>.nc",
-    griddes = "../maps/grid_<GRID_NAME>.txt")
+function proj_str_to_crs(proj_str)
+    # Return individual crs parameters of proj string
 
-# Load cdo grid description file
-griddes = replace(griddes,"<GRID_NAME>" => grid_name)
-grid_info = read_cdo_grid_file(griddes,grid_name,domain)
+    proj = Dict()
 
-# Create a new file
-filename = replace(filename,"<GRID_NAME>" => grid_name)
-filename = joinpath(fldr,filename)
+    for param in split(proj_str)
+        if occursin("=", param)
+            key, val = split(param, "=", limit=2)
+            #key = replace(key,"+" => "")
+            proj[key] = tryparse(Float64, val) !== nothing ? parse(Float64, val) : val
+        else
+            proj[param] = true  # handle flags like +no_defs
+        end
+    end
 
-xc, yc = define_grid_nc(grid_info, filename)
-
-lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)
-area = cell_areas(lat2D, lon2D)
-
-write_2d_variable(filename,"lat2D",lat2D)
-write_2d_variable(filename,"lon2D",lon2D)
-write_2d_variable(filename,"area",area)
-
-println("File written: $filename")
+    return proj
 end
 
-function define_grid_nc(grid_info::Dict{String,Any}, filename::String)
-    # Extract basic grid info
-    xsize = grid_info["xsize"]
-    ysize = grid_info["ysize"]
-    xfirst = grid_info["xfirst"]
-    xinc = grid_info["xinc"]
-    yfirst = grid_info["yfirst"]
-    yinc = grid_info["yinc"]
-    xname = grid_info["xname"]
-    yname = grid_info["yname"]
-    xunits = get(grid_info, "xunits", "")
-    yunits = get(grid_info, "yunits", "")
+"""
+    proj_to_cf(proj::Dict)
 
-    # Construct coordinate vectors
-    xc = xfirst:xinc:(xfirst + xinc * (xsize - 1))
-    yc = yfirst:yinc:(yfirst + yinc * (ysize - 1))
+Convert a dictionary of PROJ parameters (e.g. `"+lat_0"` => 90.0) into a CF-compliant dictionary
+of NetCDF attributes for a `grid_mapping` variable.
+
+Assumes `+proj=stere` (polar stereographic projection).
+"""
+function proj_to_cf(proj::Dict)
+    # Convert a list of proj parameters to cf-compliant names
+
+    # Check projection type (only supporting polar stereographic for now)
+    if proj["+proj"] != "stere"
+        error("Only +proj=stere (polar stereographic) is currently supported.")
+    end
+
+    # Map PROJ keys to CF-compliant names
+    cf_map = Dict(
+        "+lat_0"  => "latitude_of_projection_origin",
+        "+lat_ts" => "standard_parallel",
+        "+lon_0"  => "straight_vertical_longitude_from_pole",
+        "+x_0"    => "false_easting",
+        "+y_0"    => "false_northing",
+        "+a"      => "semi_major_axis",
+        "+rf"     => "inverse_flattening"
+    )
+
+    # Build output dictionary
+    proj_cf = Dict{String,Any}(
+        "grid_mapping_name" => "polar_stereographic"
+    )
+
+    for (k_proj, k_cf) in cf_map
+        if haskey(proj, k_proj)
+            proj_cf[k_cf] = proj[k_proj]
+        end
+    end
+
+    return proj_cf
+end
+
+function proj_to_cf(proj_str::String)
+    # Convert a proj string to a list of cf-compliant parameters
+
+    proj = proj_str_to_crs(proj_str)
+    proj_cf = proj_to_cf(proj)
+
+    return proj_cf
+end
+
+function grid_write_nc(grid,filename; 
+            xname::String="xc",yname::String="yc")
 
     # Create NetCDF file
     ds = NCDataset(filename, "c")
 
     # Define dimensions
-    defDim(ds, xname, xsize)
-    defDim(ds, yname, ysize)
+    defDim(ds, xname, grid["nx"])
+    defDim(ds, yname, grid["ny"])
 
     # Define coordinate variables
     var_xc = defVar(ds, xname, Float64, (xname,))
-    var_xc.attrib["units"] = xunits
-    var_xc[:] = xc
+    var_xc.attrib["units"] = grid["xunits"]
+    var_xc[:] = grid["xc"]
     
     var_yc = defVar(ds, yname, Float64, (yname,))
-    var_yc.attrib["units"] = yunits
-    var_yc[:] = yc
-
-    # Add x2D, y2D
-    nx = size(xc,1)
-    ny = size(yc,1)
-    x2D = xc .* ones(1, ny)
-    y2D = ones(nx, 1) .* yc'
-
-    var_x2D = defVar(ds, "x2D", Float64, (xname,yname))
-    var_x2D.attrib["units"] = xunits
-    var_x2D[:] = x2D
-
-    var_y2D = defVar(ds, "y2D", Float64, (xname,yname))
-    var_y2D.attrib["units"] = yunits
-    var_y2D[:] = y2D
+    var_yc.attrib["units"] = grid["yunits"]
+    var_yc[:] = grid["yc"]
 
     # Define the projection variable 'crs'
+    proj_cf = grid["proj_cf"]
+
     crs = defVar(ds, "crs", Int32, ())
-    crs.attrib["grid_mapping_name"] = grid_info["grid_mapping_name"]
-    crs.attrib["straight_vertical_longitude_from_pole"] = grid_info["straight_vertical_longitude_from_pole"]
-    crs.attrib["latitude_of_projection_origin"] = grid_info["latitude_of_projection_origin"]
-    crs.attrib["standard_parallel"] = grid_info["standard_parallel"]
-    crs.attrib["false_easting"] = grid_info["false_easting"]
-    crs.attrib["false_northing"] = grid_info["false_northing"]
-    crs.attrib["semi_major_axis"] = grid_info["semi_major_axis"]
-    crs.attrib["inverse_flattening"] = grid_info["inverse_flattening"]
+    crs.attrib["grid_mapping_name"] = proj_cf["grid_mapping_name"]
+    crs.attrib["straight_vertical_longitude_from_pole"] = proj_cf["straight_vertical_longitude_from_pole"]
+    crs.attrib["latitude_of_projection_origin"] = proj_cf["latitude_of_projection_origin"]
+    crs.attrib["standard_parallel"] = proj_cf["standard_parallel"]
+    crs.attrib["false_easting"] = proj_cf["false_easting"]
+    crs.attrib["false_northing"] = proj_cf["false_northing"]
+    crs.attrib["semi_major_axis"] = proj_cf["semi_major_axis"]
+    crs.attrib["inverse_flattening"] = proj_cf["inverse_flattening"]
 
     close(ds)
 
-    return collect(xc), collect(yc)
+    # Add additional grid variables
+
+    write_2d_variable(filename,"x2D",grid["x2D"],xdim=xname,ydim=yname,units=grid["xunits"])
+    write_2d_variable(filename,"y2D",grid["y2D"],xdim=xname,ydim=yname,units=grid["xunits"])
+    write_2d_variable(filename,"lat2D",grid["lat2D"],xdim=xname,ydim=yname,units="degrees_north")
+    write_2d_variable(filename,"lon2D",grid["lon2D"],xdim=xname,ydim=yname,units="degrees_east")
+    write_2d_variable(filename,"area",grid["area"],xdim=xname,ydim=yname,units="m^2")
+
+    println("File written: $filename")
 end
 
-function projected_to_latlon(grid_info::Dict, xc::Vector{<:Real}, yc::Vector{<:Real})
-    
-    # Define the source and destination CRS
-    source_crs = grid_info["proj_str"]
-    dest_crs = "EPSG:4326" # Latitude/longitude
+
+
+
+function projected_to_latlon(xc::Vector{<:Real}, yc::Vector{<:Real},source_crs;dest_crs = "EPSG:4326")
+    # source CRS assumed to be Cartesian projected
+    # destination CRS assumed to be lat/lon
 
     # Create the transformation object
     transformation = Proj.Transformation(source_crs, dest_crs; always_xy=true)
@@ -263,6 +398,7 @@ function write_2d_variable(
     data::AbstractMatrix;
     xdim::String = "xc",
     ydim::String = "yc",
+    units::String = "",
 )
 
     # Open NetCDF file in append mode
@@ -281,6 +417,6 @@ function write_2d_variable(
     # end
 
     var.attrib["grid_mapping"] = "crs"
-
+    var.attrib["units"] = units
     close(ds)
 end

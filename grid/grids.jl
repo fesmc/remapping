@@ -48,6 +48,30 @@ function read_cdo_grid_file(filepath::String,grid_name::String,domain::String)
     return grid_dict
 end
 
+function define_my_grid(domain,grid_name;fldr="../maps",
+    filename="grid_<GRID_NAME>.nc",
+    griddes = "../maps/grid_<GRID_NAME>.txt")
+
+# Load cdo grid description file
+griddes = replace(griddes,"<GRID_NAME>" => grid_name)
+grid_info = read_cdo_grid_file(griddes,grid_name,domain)
+
+# Create a new file
+filename = replace(filename,"<GRID_NAME>" => grid_name)
+filename = joinpath(fldr,filename)
+
+xc, yc = define_grid_nc(grid_info, filename)
+
+lat2D, lon2D = projected_to_latlon(grid_info, xc, yc)
+area = cell_areas(lat2D, lon2D)
+
+write_2d_variable(filename,"lat2D",lat2D)
+write_2d_variable(filename,"lon2D",lon2D)
+write_2d_variable(filename,"area",area)
+
+println("File written: $filename")
+end
+
 function define_grid_nc(grid_info::Dict{String,Any}, filename::String)
     # Extract basic grid info
     xsize = grid_info["xsize"]
@@ -180,7 +204,7 @@ end
 function cell_areas(lat2D::Matrix{Float64}, lon2D::Matrix{Float64})
     nx, ny = size(lat2D)
     area = fill(0.0, nx, ny)
-    
+
     for j in 2:ny-1, i in 2:nx-1
         
         im1 = i-1
